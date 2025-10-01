@@ -2,10 +2,11 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\ProcessedFile;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use setasign\Fpdi\Tcpdf\Fpdi;
-use Storage;
 
 class PdfController extends Controller
 {
@@ -24,6 +25,10 @@ class PdfController extends Controller
 
         $splitPdfs = [];
 
+        $originalName = pathinfo($pdf->getClientOriginalName(), PATHINFO_FILENAME);
+        $safeName     = Str::slug($originalName); // makes it URL-safe
+
+
         foreach ($pages as $pageNum) {
             $fpdi = new Fpdi();
 
@@ -35,15 +40,25 @@ class PdfController extends Controller
                     $template = $fpdi->importPage($pageNum);
                     $fpdi->useTemplate($template);
 
-                    $filename = Str::random(40) . '_page_' . $pageNum . '.pdf';
+                    $filename     = $safeName . '-page-' . $pageNum . '-' . Str::random(8) . '.pdf';
                     $content = $fpdi->Output('', 'S');
 
                     Storage::disk('public')->put('split/' . $filename, $content);
 
+                    $processedFile = ProcessedFile::create([
+                        'filename'   => $filename,
+                        'type'       => 'split',
+                        'path'       => 'split/' . $filename,
+                        'size'       => strlen($content),
+                        'expires_at' => now()->addHours(2),
+                    ]);
+
                     $splitPdfs[] = [
-                        'page' => $pageNum,
-                        'filename' => $filename,
-                        'url' => Storage::disk('public')->url('split/' . $filename)
+                        'page'        => $pageNum,
+                        'filename'    => $filename,
+                        'download_url' => route('files.download', ['type' => 'split', 'filename' => $filename]),
+                        'url' => Storage::disk('public')->url($processedFile->path),
+                        'expires_at'  => now()->addHours(2)->toDateTimeString(),
                     ];
                 }
             } catch (\Exception $e) {
@@ -68,7 +83,10 @@ class PdfController extends Controller
         ]);
 
         $pdfs = $request->file('pdfs');
-        $mergedFilename = Str::random(40) . '_merged.pdf';
+        $firstName   = pathinfo($pdfs[0]->getClientOriginalName(), PATHINFO_FILENAME);
+        $safeName    = Str::slug($firstName);
+        $mergedFilename = $safeName . '-merged-' . Str::random(8) . '.pdf';
+
 
         $fpdi = new Fpdi();
 
@@ -90,10 +108,20 @@ class PdfController extends Controller
         $content = $fpdi->Output('', 'S');
         Storage::disk('public')->put('merged/' . $mergedFilename, $content);
 
+        $processedFile = ProcessedFile::create([
+            'filename'   => $mergedFilename,
+            'type'       => 'merged',
+            'path'       => 'merged/' . $mergedFilename,
+            'size'       => strlen($content),
+            'expires_at' => now()->addHours(2),
+        ]);
+
         return response()->json([
-            'success' => true,
-            'filename' => $mergedFilename,
-            'url' => Storage::disk('public')->url('merged/' . $mergedFilename)
+            'success'      => true,
+            'filename'     => $mergedFilename,
+            'download_url' => route('files.download', ['type' => 'merged', 'filename' => $mergedFilename]),
+            'url' => Storage::disk('public')->url($processedFile->path),
+            'expires_at'   => now()->addHours(2)->toDateTimeString(),
         ]);
     }
 
