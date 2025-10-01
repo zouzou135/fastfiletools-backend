@@ -10,6 +10,12 @@ use setasign\Fpdi\Tcpdf\Fpdi;
 
 class PdfController extends Controller
 {
+
+    private function createTempFile(string $extension = 'jpg'): string
+    {
+        return tempnam(sys_get_temp_dir(), 'tmp_') . '.' . $extension;
+    }
+
     public function split(Request $request)
     {
         $request->validate([
@@ -28,7 +34,7 @@ class PdfController extends Controller
         }
 
         $pdf = $request->file('pdf');
-        $tempPath = storage_path('app/temp/' . Str::random(20) . '.pdf');
+        $tempPath = $this->createTempFile('pdf');
         $pdf->move(dirname($tempPath), basename($tempPath));
 
         $fpdi = new Fpdi();
@@ -115,7 +121,7 @@ class PdfController extends Controller
         $fpdi = new Fpdi();
 
         foreach ($pdfs as $pdf) {
-            $tempPath = storage_path('app/temp/' . Str::random(20) . '.pdf');
+            $tempPath = $this->createTempFile('pdf');
             $pdf->move(dirname($tempPath), basename($tempPath));
 
             $pageCount = $fpdi->setSourceFile($tempPath);

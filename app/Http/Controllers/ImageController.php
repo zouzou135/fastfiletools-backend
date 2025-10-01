@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\ProcessedFile;
+use File;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -11,6 +12,21 @@ use Intervention\Image\ImageManager;
 
 class ImageController extends Controller
 {
+
+    protected ImageManager $imageManager;
+
+    public function __construct()
+    {
+        // Initialize once for all methods
+        $this->imageManager = new ImageManager(new Driver());
+    }
+
+    private function createTempFile(string $extension = 'jpg'): string
+    {
+        return tempnam(sys_get_temp_dir(), 'tmp_') . '.' . $extension;
+    }
+
+
     public function compress(Request $request)
     {
         $request->validate([
@@ -25,8 +41,7 @@ class ImageController extends Controller
         $filename = $safeName . '-' . Str::random(8) . '.' . $image->getClientOriginalExtension();
         $path     = 'compressed/' . $filename;
 
-        $manager    = new ImageManager(new Driver());
-        $img        = $manager->read($image);
+        $img        = $this->imageManager->read($image);
         $compressed = $img->encodeByExtension($image->getClientOriginalExtension(), $quality);
 
         Storage::disk('public')->put($path, $compressed);
@@ -66,10 +81,9 @@ class ImageController extends Controller
         $originalName = pathinfo($image->getClientOriginalName(), PATHINFO_FILENAME);
         $safeName = Str::slug($originalName); // makes it URL-safe
         $filename = $safeName . '-' . Str::random(8) . '.' . $image->getClientOriginalExtension();
-        $path     = 'enhanced/' . $filename;
+        $path     = 'tuned/' . $filename;
 
-        $manager = new ImageManager(new Driver());
-        $img     = $manager->read($image);
+        $img     = $this->imageManager->read($image);
 
         if ($request->has('brightness')) {
             $img->brightness($request->get('brightness'));
@@ -81,14 +95,14 @@ class ImageController extends Controller
             // Intervention Image doesn’t support saturation directly
         }
 
-        $enhanced = $img->encodeByExtension($image->getClientOriginalExtension());
-        Storage::disk('public')->put($path, $enhanced);
+        $tuned = $img->encodeByExtension($image->getClientOriginalExtension());
+        Storage::disk('public')->put($path, $tuned);
 
         $processedFile = ProcessedFile::create([
             'filename'   => $filename,
-            'type'       => 'enhanced',
+            'type'       => 'tuned',
             'path'       => $path,
-            'size'       => strlen($enhanced),
+            'size'       => strlen($tuned),
             'expires_at' => now()->addHours(2),
         ]);
 
@@ -125,13 +139,22 @@ class ImageController extends Controller
         $pdf = new \TCPDF();
 
         foreach ($images as $image) {
-            $manager  = new ImageManager(new Driver());
-            $img      = $manager->read($image);
-            $tempPath = storage_path('app/temp/' . Str::random(20) . '.jpg');
+            $extension = strtolower($image->getClientOriginalExtension());
+
+            if (!in_array($extension, ['jpg', 'jpeg', 'png', 'gif', 'webp'])) {
+                // Fallback: re-encode to jpg or reject
+                $extension = 'jpg';
+            }
+
+            $img      = $this->imageManager->read($image);
+
+            // Create a temp file path in the system temp directory
+            $tempPath = $this->createTempFile($extension);
+
             $img->save($tempPath);
 
             $pdf->AddPage();
-            $pdf->Image($tempPath, 10, 10, 190, 0, 'JPG');
+            $pdf->Image($tempPath, 10, 10, 190, 0, strtoupper($extension));
 
             unlink($tempPath);
         }
