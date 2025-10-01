@@ -13,61 +13,85 @@ class PdfController extends Controller
     public function split(Request $request)
     {
         $request->validate([
-            'pdf' => 'required|mimes:pdf|max:50240', // 50MB max
-            'pages' => 'required|string' // e.g., "1,3,5-8"
+            'pdf' => 'required|mimes:pdf|max:50240',
+            'pages' => 'required|string'
         ]);
 
-        $pdf = $request->file('pdf');
-        $pages = $this->parsePageRange($request->get('pages'));
+        $pageString = $request->get('pages');
 
+        // Validate format first (using the stricter regex we discussed)
+        if (!preg_match('/^\s*\d+(\s*-\s*\d+)?(\s*,\s*\d+(\s*-\s*\d+)?)*\s*$/', $pageString)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Invalid page range format. Use numbers and ranges like "1,3,5-8".'
+            ], 422);
+        }
+
+        $pdf = $request->file('pdf');
         $tempPath = storage_path('app/temp/' . Str::random(20) . '.pdf');
         $pdf->move(dirname($tempPath), basename($tempPath));
 
+        $fpdi = new Fpdi();
+        $pageCount = $fpdi->setSourceFile($tempPath);
+
+        $ranges = explode(',', $pageString);
         $splitPdfs = [];
 
         $originalName = pathinfo($pdf->getClientOriginalName(), PATHINFO_FILENAME);
-        $safeName     = Str::slug($originalName); // makes it URL-safe
+        $safeName     = Str::slug($originalName);
 
+        foreach ($ranges as $range) {
+            $range = trim($range);
 
-        foreach ($pages as $pageNum) {
-            $fpdi = new Fpdi();
-
-            try {
-                $pageCount = $fpdi->setSourceFile($tempPath);
-
-                if ($pageNum <= $pageCount) {
-                    $fpdi->AddPage();
-                    $template = $fpdi->importPage($pageNum);
-                    $fpdi->useTemplate($template);
-
-                    $filename     = $safeName . '-page-' . $pageNum . '-' . Str::random(8) . '.pdf';
-                    $content = $fpdi->Output('', 'S');
-
-                    Storage::disk('public')->put('split/' . $filename, $content);
-
-                    $processedFile = ProcessedFile::create([
-                        'filename'   => $filename,
-                        'type'       => 'split',
-                        'path'       => 'split/' . $filename,
-                        'size'       => strlen($content),
-                        'expires_at' => now()->addHours(2),
-                    ]);
-
-                    $splitPdfs[] = [
-                        'page'        => $pageNum,
-                        'filename'    => $filename,
-                        'download_url' => route('files.download', ['type' => 'split', 'filename' => $filename]),
-                        'url' => Storage::disk('public')->url($processedFile->path),
-                        'expires_at'  => now()->addHours(2)->toDateTimeString(),
-                    ];
-                }
-            } catch (\Exception $e) {
-                // Handle error
-                continue;
+            // Determine start and end
+            if (strpos($range, '-') !== false) {
+                [$start, $end] = array_map('intval', explode('-', $range));
+            } else {
+                $start = $end = (int)$range;
             }
+
+            // Bounds check
+            if ($start < 1 || $end > $pageCount || $start > $end) {
+                unlink($tempPath);
+                return response()->json([
+                    'success' => false,
+                    'message' => "Invalid range {$range}. This PDF has {$pageCount} pages."
+                ], 422);
+            }
+
+            // Create one PDF for this range
+            $fpdiRange = new Fpdi();
+            $fpdiRange->setSourceFile($tempPath);
+
+            for ($i = $start; $i <= $end; $i++) {
+                $fpdiRange->AddPage();
+                $template = $fpdiRange->importPage($i);
+                $fpdiRange->useTemplate($template);
+            }
+
+            $filename = $safeName . '-pages-' . $start . '-' . $end . '-' . Str::random(8) . '.pdf';
+            $content  = $fpdiRange->Output('', 'S');
+
+            Storage::disk('public')->put('split/' . $filename, $content);
+
+            $processedFile = ProcessedFile::create([
+                'filename'   => $filename,
+                'type'       => 'split',
+                'path'       => 'split/' . $filename,
+                'size'       => strlen($content),
+                'expires_at' => now()->addHours(2),
+            ]);
+
+            $splitPdfs[] = [
+                'range'        => $start === $end ? (string)$start : "{$start}-{$end}",
+                'filename'     => $filename,
+                'download_url' => route('files.download', ['type' => 'split', 'filename' => $filename]),
+                'url'          => Storage::disk('public')->url($processedFile->path),
+                'expires_at'   => now()->addHours(2)->toDateTimeString(),
+            ];
         }
 
-        unlink($tempPath); // Clean up
+        unlink($tempPath);
 
         return response()->json([
             'success' => true,
@@ -123,25 +147,5 @@ class PdfController extends Controller
             'url' => Storage::disk('public')->url($processedFile->path),
             'expires_at'   => now()->addHours(2)->toDateTimeString(),
         ]);
-    }
-
-    private function parsePageRange($pageString)
-    {
-        $pages = [];
-        $parts = explode(',', $pageString);
-
-        foreach ($parts as $part) {
-            $part = trim($part);
-            if (strpos($part, '-') !== false) {
-                [$start, $end] = explode('-', $part);
-                for ($i = (int)$start; $i <= (int)$end; $i++) {
-                    $pages[] = $i;
-                }
-            } else {
-                $pages[] = (int)$part;
-            }
-        }
-
-        return array_unique($pages);
     }
 }
