@@ -10,6 +10,7 @@ use Illuminate\Support\Str;
 use Mostafaznv\PdfOptimizer\Enums\PdfSettings;
 use Mostafaznv\PdfOptimizer\Laravel\Facade\PdfOptimizer;
 use setasign\Fpdi\Tcpdf\Fpdi;
+use Symfony\Component\Process\Process;
 
 class PdfController extends Controller
 {
@@ -56,19 +57,16 @@ class PdfController extends Controller
         // Save the image into that path
         $pdf->move(dirname($tempPath), basename($tempPath));
 
-        // Normalize before FPDI
-        $normalizedRelPath = 'temp/normalized-' . Str::random(8) . '.pdf';
-        PdfOptimizer::fromDisk('local')
-            ->open(str_replace(storage_path('app/'), '', $tempPath))
-            ->toDisk('local')
-            ->settings(PdfSettings::SCREEN)
-            ->optimize($normalizedRelPath);
+        $normalizedPath = storage_path('app/temp/normalized-' . Str::random(8) . '.pdf');
 
-        // Clean up the original
-        unlink($tempPath);
-
-        // Absolute path for FPDI
-        $normalizedPath = storage_path('app/' . $normalizedRelPath);
+        try {
+            $this->normalizePdfWithGhostscript($tempPath, $normalizedPath);
+        } finally {
+            // Clean up the original
+            if (file_exists($tempPath)) {
+                unlink($tempPath);
+            }
+        }
 
         try {
             $fpdi = new Fpdi();
@@ -165,19 +163,16 @@ class PdfController extends Controller
             // Save the image into that path
             $pdf->move(dirname($tempPath), basename($tempPath));
 
-            // Normalize before FPDI
-            $normalizedRelPath = 'temp/normalized-' . Str::random(8) . '.pdf';
-            PdfOptimizer::fromDisk('local')
-                ->open(str_replace(storage_path('app/'), '', $tempPath))
-                ->toDisk('local')
-                ->settings(PdfSettings::SCREEN)
-                ->optimize($normalizedRelPath);
+            $normalizedPath = storage_path('app/temp/normalized-' . Str::random(8) . '.pdf');
 
-            // Clean up the original
-            unlink($tempPath);
-
-            // Absolute path for FPDI
-            $normalizedPath = storage_path('app/' . $normalizedRelPath);
+            try {
+                $this->normalizePdfWithGhostscript($tempPath, $normalizedPath);
+            } finally {
+                // Clean up the original
+                if (file_exists($tempPath)) {
+                    unlink($tempPath);
+                }
+            }
 
             try {
                 $pageCount = $fpdi->setSourceFile($normalizedPath);
@@ -211,5 +206,24 @@ class PdfController extends Controller
             'url' => Storage::disk('public')->url($processedFile->path),
             'expires_at'   => now()->addHours(2)->toDateTimeString(),
         ]);
+    }
+
+    public function normalizePdfWithGhostscript(string $inputPath, string $outputPath): Process
+    {
+        $process = new Process([
+            'gs',
+            '-sDEVICE=pdfwrite',
+            '-dCompatibilityLevel=1.4',
+            '-dPDFSETTINGS=/screen',
+            '-dNOPAUSE',
+            '-dQUIET',
+            '-dBATCH',
+            "-sOutputFile=$outputPath",
+            $inputPath
+        ]);
+
+        $process->run();
+
+        return $process;
     }
 }
