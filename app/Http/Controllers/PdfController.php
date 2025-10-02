@@ -3,17 +3,31 @@
 namespace App\Http\Controllers;
 
 use App\Models\ProcessedFile;
+use File;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
+use Mostafaznv\PdfOptimizer\Enums\PdfSettings;
+use Mostafaznv\PdfOptimizer\Laravel\Facade\PdfOptimizer;
 use setasign\Fpdi\Tcpdf\Fpdi;
 
 class PdfController extends Controller
 {
 
-    private function createTempFile(string $extension = 'jpg'): string
+    public function __construct()
     {
-        return tempnam(sys_get_temp_dir(), 'tmp_') . '.' . $extension;
+        // Only need to ensure temp directory exists
+        // Storage::put() handles everything else automatically
+        $this->ensureTempDirectory();
+    }
+
+    private function ensureTempDirectory(): void
+    {
+        $tempPath = storage_path('app/temp');
+
+        if (!File::exists($tempPath)) {
+            File::makeDirectory($tempPath, 0755, true);
+        }
     }
 
     public function split(Request $request)
@@ -34,70 +48,93 @@ class PdfController extends Controller
         }
 
         $pdf = $request->file('pdf');
-        $tempPath = $this->createTempFile('pdf');
+
+        // Create a temp file path inside storage/app/temp
+        $filename  = 'tmp_' . Str::random(12) . '.pdf';
+        $tempPath  = storage_path('app/temp/' . $filename);
+
+        // Save the image into that path
         $pdf->move(dirname($tempPath), basename($tempPath));
 
-        $fpdi = new Fpdi();
-        $pageCount = $fpdi->setSourceFile($tempPath);
+        // Normalize before FPDI
+        $normalizedRelPath = 'temp/normalized-' . Str::random(8) . '.pdf';
+        PdfOptimizer::fromDisk('local')
+            ->open(str_replace(storage_path('app/'), '', $tempPath))
+            ->toDisk('local')
+            ->settings(PdfSettings::SCREEN)
+            ->optimize($normalizedRelPath);
 
-        $ranges = explode(',', $pageString);
-        $splitPdfs = [];
-
-        $originalName = pathinfo($pdf->getClientOriginalName(), PATHINFO_FILENAME);
-        $safeName     = Str::slug($originalName);
-
-        foreach ($ranges as $range) {
-            $range = trim($range);
-
-            // Determine start and end
-            if (strpos($range, '-') !== false) {
-                [$start, $end] = array_map('intval', explode('-', $range));
-            } else {
-                $start = $end = (int)$range;
-            }
-
-            // Bounds check
-            if ($start < 1 || $end > $pageCount || $start > $end) {
-                unlink($tempPath);
-                return response()->json([
-                    'success' => false,
-                    'message' => "Invalid range {$range}. This PDF has {$pageCount} pages."
-                ], 422);
-            }
-
-            // Create one PDF for this range
-            $fpdiRange = new Fpdi();
-            $fpdiRange->setSourceFile($tempPath);
-
-            for ($i = $start; $i <= $end; $i++) {
-                $fpdiRange->AddPage();
-                $template = $fpdiRange->importPage($i);
-                $fpdiRange->useTemplate($template);
-            }
-
-            $filename = $safeName . '-pages-' . $start . '-' . $end . '-' . Str::random(8) . '.pdf';
-            $content  = $fpdiRange->Output('', 'S');
-
-            Storage::disk('public')->put('split/' . $filename, $content);
-
-            $processedFile = ProcessedFile::create([
-                'filename'   => $filename,
-                'type'       => 'split',
-                'path'       => 'split/' . $filename,
-                'size'       => strlen($content),
-                'expires_at' => now()->addHours(2),
-            ]);
-
-            $splitPdfs[] = [
-                'range'        => $start === $end ? (string)$start : "{$start}-{$end}",
-                'filename'     => $filename,
-                'download_url' => route('files.download', ['type' => 'split', 'filename' => $filename]),
-                'url'          => Storage::disk('public')->url($processedFile->path),
-                'expires_at'   => now()->addHours(2)->toDateTimeString(),
-            ];
-        }
-
+        // Clean up the original
         unlink($tempPath);
+
+        // Absolute path for FPDI
+        $normalizedPath = storage_path('app/' . $normalizedRelPath);
+
+        try {
+            $fpdi = new Fpdi();
+            $pageCount = $fpdi->setSourceFile($normalizedPath);
+
+            $ranges = explode(',', $pageString);
+            $splitPdfs = [];
+
+            $originalName = pathinfo($pdf->getClientOriginalName(), PATHINFO_FILENAME);
+            $safeName     = Str::slug($originalName);
+
+            foreach ($ranges as $range) {
+                $range = trim($range);
+
+                // Determine start and end
+                if (strpos($range, '-') !== false) {
+                    [$start, $end] = array_map('intval', explode('-', $range));
+                } else {
+                    $start = $end = (int)$range;
+                }
+
+                // Bounds check
+                if ($start < 1 || $end > $pageCount || $start > $end) {
+                    // unlink($normalizedPath);
+                    return response()->json([
+                        'success' => false,
+                        'message' => "Invalid range {$range}. This PDF has {$pageCount} pages."
+                    ], 422);
+                }
+
+                // Create one PDF for this range
+                $fpdiRange = new Fpdi();
+                $fpdiRange->setSourceFile($normalizedPath);
+
+                for ($i = $start; $i <= $end; $i++) {
+                    $fpdiRange->AddPage();
+                    $template = $fpdiRange->importPage($i);
+                    $fpdiRange->useTemplate($template);
+                }
+
+                $filename = $safeName . '-pages-' . $start . '-' . $end . '-' . Str::random(8) . '.pdf';
+                $content  = $fpdiRange->Output('', 'S');
+
+                Storage::disk('public')->put('split/' . $filename, $content);
+
+                $processedFile = ProcessedFile::create([
+                    'filename'   => $filename,
+                    'type'       => 'split',
+                    'path'       => 'split/' . $filename,
+                    'size'       => strlen($content),
+                    'expires_at' => now()->addHours(2),
+                ]);
+
+                $splitPdfs[] = [
+                    'range'        => $start === $end ? (string)$start : "{$start}-{$end}",
+                    'filename'     => $filename,
+                    'download_url' => route('files.download', ['type' => 'split', 'filename' => $filename]),
+                    'url'          => Storage::disk('public')->url($processedFile->path),
+                    'expires_at'   => now()->addHours(2)->toDateTimeString(),
+                ];
+            }
+        } finally {
+            if (file_exists($normalizedPath)) {
+                unlink($normalizedPath);
+            }
+        }
 
         return response()->json([
             'success' => true,
@@ -121,18 +158,39 @@ class PdfController extends Controller
         $fpdi = new Fpdi();
 
         foreach ($pdfs as $pdf) {
-            $tempPath = $this->createTempFile('pdf');
+            // Create a temp file path inside storage/app/temp
+            $filename  = 'tmp_' . Str::random(12) . '.pdf';
+            $tempPath  = storage_path('app/temp/' . $filename);
+
+            // Save the image into that path
             $pdf->move(dirname($tempPath), basename($tempPath));
 
-            $pageCount = $fpdi->setSourceFile($tempPath);
+            // Normalize before FPDI
+            $normalizedRelPath = 'temp/normalized-' . Str::random(8) . '.pdf';
+            PdfOptimizer::fromDisk('local')
+                ->open(str_replace(storage_path('app/'), '', $tempPath))
+                ->toDisk('local')
+                ->settings(PdfSettings::SCREEN)
+                ->optimize($normalizedRelPath);
 
-            for ($i = 1; $i <= $pageCount; $i++) {
-                $fpdi->AddPage();
-                $template = $fpdi->importPage($i);
-                $fpdi->useTemplate($template);
+            // Clean up the original
+            unlink($tempPath);
+
+            // Absolute path for FPDI
+            $normalizedPath = storage_path('app/' . $normalizedRelPath);
+
+            try {
+                $pageCount = $fpdi->setSourceFile($normalizedPath);
+                for ($i = 1; $i <= $pageCount; $i++) {
+                    $fpdi->AddPage();
+                    $template = $fpdi->importPage($i);
+                    $fpdi->useTemplate($template);
+                }
+            } finally {
+                if (file_exists($normalizedPath)) {
+                    unlink($normalizedPath);
+                }
             }
-
-            unlink($tempPath); // Clean up
         }
 
         $content = $fpdi->Output('', 'S');

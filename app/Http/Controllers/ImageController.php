@@ -19,11 +19,19 @@ class ImageController extends Controller
     {
         // Initialize once for all methods
         $this->imageManager = new ImageManager(new Driver());
+
+        // Only need to ensure temp directory exists
+        // Storage::put() handles everything else automatically
+        $this->ensureTempDirectory();
     }
 
-    private function createTempFile(string $extension = 'jpg'): string
+    private function ensureTempDirectory(): void
     {
-        return tempnam(sys_get_temp_dir(), 'tmp_') . '.' . $extension;
+        $tempPath = storage_path('app/temp');
+
+        if (!File::exists($tempPath)) {
+            File::makeDirectory($tempPath, 0755, true);
+        }
     }
 
 
@@ -148,9 +156,11 @@ class ImageController extends Controller
 
             $img      = $this->imageManager->read($image);
 
-            // Create a temp file path in the system temp directory
-            $tempPath = $this->createTempFile($extension);
+            // Create a temp file path inside storage/app/temp
+            $filename  = 'tmp_' . Str::random(12) . '.' . $extension;
+            $tempPath  = storage_path('app/temp/' . $filename);
 
+            // Save the image into that path
             $img->save($tempPath);
 
             $pdf->AddPage();
