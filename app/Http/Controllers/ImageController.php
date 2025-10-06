@@ -104,8 +104,7 @@ class ImageController extends Controller
             'url'     => Storage::disk('public')->url($processedFile->path),
             'expires_at'      => $processedFile->expires_at->toDateTimeString(),
             'original_size'   => $image->getSize(),
-            'compressed_size' => $processedFile->size,
-            "fullPath" => $fullPath
+            'compressed_size' => $finalSize,
         ]);
     }
 
