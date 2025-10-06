@@ -84,6 +84,7 @@ class ImageController extends Controller
             exec("pngquant --force --quality={$minQuality}-{$maxQuality} --output {$fullPath} {$fullPath}");
         }
 
+        clearstatcache(true, $fullPath);
         $finalSize = filesize($fullPath);
 
         $processedFile = ProcessedFile::create([
@@ -104,7 +105,7 @@ class ImageController extends Controller
             'url'     => Storage::disk('public')->url($processedFile->path),
             'expires_at'      => $processedFile->expires_at->toDateTimeString(),
             'original_size'   => $image->getSize(),
-            'compressed_size' => $finalSize,
+            'compressed_size' => $processedFile->size,
         ]);
     }
 
