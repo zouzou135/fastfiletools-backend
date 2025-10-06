@@ -75,6 +75,7 @@ class ImageController extends Controller
 
         $fullPath = storage_path("app/public/{$path}");
 
+        $pngExec = null;
         // Post-process with shell tools
         if (in_array($extension, ['jpg', 'jpeg'])) {
             exec("jpegoptim --strip-all --preserve --max={$quality} {$fullPath}");
@@ -105,6 +106,7 @@ class ImageController extends Controller
             'expires_at'      => $processedFile->expires_at->toDateTimeString(),
             'original_size'   => $image->getSize(),
             'compressed_size' => $processedFile->size,
+            'exec' => $pngExec?->error_log(),
         ]);
     }
 
