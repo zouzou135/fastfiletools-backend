@@ -1,5 +1,6 @@
 <?php
 
+use App\Models\FileJob;
 use App\Models\ProcessedFile;
 use Illuminate\Foundation\Inspiring;
 use Illuminate\Support\Facades\Artisan;
@@ -18,3 +19,8 @@ Schedule::call(function () {
         $file->delete();
     }
 })->hourly();
+
+Schedule::call(function () {
+    // Delete expired jobs (older than 1 day)
+    FileJob::expired()->delete();
+})->daily();

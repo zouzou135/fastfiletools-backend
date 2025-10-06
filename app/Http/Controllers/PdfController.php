@@ -2,6 +2,9 @@
 
 namespace App\Http\Controllers;
 
+use App\Jobs\MergePdfJob;
+use App\Jobs\SplitPdfJob;
+use App\Models\FileJob;
 use App\Models\ProcessedFile;
 use File;
 use Illuminate\Http\Request;
@@ -48,96 +51,24 @@ class PdfController extends Controller
             ], 422);
         }
 
-        $pdf = $request->file('pdf');
+        $path = $request->file('pdf')->store('', 'temp');
+        $absolutePath = Storage::disk('temp')->path($path);
 
-        // Create a temp file path inside storage/app/temp
-        $filename  = 'tmp_' . Str::random(12) . '.pdf';
-        $tempPath  = storage_path('app/temp/' . $filename);
-
-        // Save the image into that path
-        $pdf->move(dirname($tempPath), basename($tempPath));
-
-        $normalizedPath = storage_path('app/temp/normalized-' . Str::random(8) . '.pdf');
-
-        try {
-            $this->normalizePdfWithGhostscript($tempPath, $normalizedPath);
-        } finally {
-            // Clean up the original
-            if (file_exists($tempPath)) {
-                unlink($tempPath);
-            }
-        }
-
-        try {
-            $fpdi = new Fpdi();
-            $pageCount = $fpdi->setSourceFile($normalizedPath);
-
-            $ranges = explode(',', $pageString);
-            $splitPdfs = [];
-
-            $originalName = pathinfo($pdf->getClientOriginalName(), PATHINFO_FILENAME);
-            $safeName     = Str::slug($originalName);
-
-            foreach ($ranges as $range) {
-                $range = trim($range);
-
-                // Determine start and end
-                if (strpos($range, '-') !== false) {
-                    [$start, $end] = array_map('intval', explode('-', $range));
-                } else {
-                    $start = $end = (int)$range;
-                }
-
-                // Bounds check
-                if ($start < 1 || $end > $pageCount || $start > $end) {
-                    // unlink($normalizedPath);
-                    return response()->json([
-                        'success' => false,
-                        'message' => "Invalid range {$range}. This PDF has {$pageCount} pages."
-                    ], 422);
-                }
-
-                // Create one PDF for this range
-                $fpdiRange = new Fpdi();
-                $fpdiRange->setSourceFile($normalizedPath);
-
-                for ($i = $start; $i <= $end; $i++) {
-                    $fpdiRange->AddPage();
-                    $template = $fpdiRange->importPage($i);
-                    $fpdiRange->useTemplate($template);
-                }
-
-                $filename = $safeName . '-pages-' . $start . '-' . $end . '-' . Str::random(8) . '.pdf';
-                $content  = $fpdiRange->Output('', 'S');
-
-                Storage::disk('public')->put('split/' . $filename, $content);
-
-                $processedFile = ProcessedFile::create([
-                    'filename'   => $filename,
-                    'type'       => 'split',
-                    'path'       => 'split/' . $filename,
-                    'size'       => strlen($content),
-                    'expires_at' => now()->addHours(2),
-                ]);
-
-                $splitPdfs[] = [
-                    'range'        => $start === $end ? (string)$start : "{$start}-{$end}",
-                    'filename'     => $filename,
-                    'download_url' => route('files.download', ['type' => 'split', 'filename' => $filename]),
-                    'url'          => Storage::disk('public')->url($processedFile->path),
-                    'expires_at'   => now()->addHours(2)->toDateTimeString(),
-                ];
-            }
-        } finally {
-            if (file_exists($normalizedPath)) {
-                unlink($normalizedPath);
-            }
-        }
-
-        return response()->json([
-            'success' => true,
-            'split_pdfs' => $splitPdfs
+        // Create job record
+        $job = FileJob::create([
+            'type' => 'pdf_split',
+            'status' => 'pending',
+            'progress_stage' => 'queued',
         ]);
+
+        // Dispatch background job
+        SplitPdfJob::dispatch([
+            'pdf_path' => $absolutePath,
+            'pages' => $pageString,
+            'original_name' => $request->file('pdf')->getClientOriginalName(),
+        ], $job->id);
+
+        return response()->json(['job_id' => $job->id]);
     }
 
     public function merge(Request $request)
@@ -147,65 +78,26 @@ class PdfController extends Controller
             'pdfs.*' => 'mimes:pdf|max:50240'
         ]);
 
-        $pdfs = $request->file('pdfs');
-        $firstName   = pathinfo($pdfs[0]->getClientOriginalName(), PATHINFO_FILENAME);
-        $safeName    = Str::slug($firstName);
-        $mergedFilename = $safeName . '-merged-' . Str::random(8) . '.pdf';
+        // Store all uploaded PDFs in temp
+        $pdfPaths = array_map(
+            fn($pdf) => Storage::disk('temp')->path($pdf->store('', 'temp')),
+            $request->file('pdfs')
+        );
 
-
-        $fpdi = new Fpdi();
-
-        foreach ($pdfs as $pdf) {
-            // Create a temp file path inside storage/app/temp
-            $filename  = 'tmp_' . Str::random(12) . '.pdf';
-            $tempPath  = storage_path('app/temp/' . $filename);
-
-            // Save the image into that path
-            $pdf->move(dirname($tempPath), basename($tempPath));
-
-            $normalizedPath = storage_path('app/temp/normalized-' . Str::random(8) . '.pdf');
-
-            try {
-                $this->normalizePdfWithGhostscript($tempPath, $normalizedPath);
-            } finally {
-                // Clean up the original
-                if (file_exists($tempPath)) {
-                    unlink($tempPath);
-                }
-            }
-
-            try {
-                $pageCount = $fpdi->setSourceFile($normalizedPath);
-                for ($i = 1; $i <= $pageCount; $i++) {
-                    $fpdi->AddPage();
-                    $template = $fpdi->importPage($i);
-                    $fpdi->useTemplate($template);
-                }
-            } finally {
-                if (file_exists($normalizedPath)) {
-                    unlink($normalizedPath);
-                }
-            }
-        }
-
-        $content = $fpdi->Output('', 'S');
-        Storage::disk('public')->put('merged/' . $mergedFilename, $content);
-
-        $processedFile = ProcessedFile::create([
-            'filename'   => $mergedFilename,
-            'type'       => 'merged',
-            'path'       => 'merged/' . $mergedFilename,
-            'size'       => strlen($content),
-            'expires_at' => now()->addHours(2),
+        // Create job record
+        $job = FileJob::create([
+            'type' => 'pdf_merge',
+            'status' => 'pending',
+            'progress_stage' => 'queued',
         ]);
 
-        return response()->json([
-            'success'      => true,
-            'filename'     => $mergedFilename,
-            'download_url' => route('files.download', ['type' => 'merged', 'filename' => $mergedFilename]),
-            'url' => Storage::disk('public')->url($processedFile->path),
-            'expires_at'   => now()->addHours(2)->toDateTimeString(),
-        ]);
+        // Dispatch background job
+        MergePdfJob::dispatch([
+            'pdf_paths' => $pdfPaths,
+            'original_name' => $request->file('pdfs')[0]->getClientOriginalName(),
+        ], $job->id);
+
+        return response()->json(['job_id' => $job->id]);
     }
 
     public function normalizePdfWithGhostscript(string $inputPath, string $outputPath): Process

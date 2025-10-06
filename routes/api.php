@@ -16,4 +16,21 @@ Route::prefix('pdf')->group(function () {
     Route::post('/merge', [PdfController::class, 'merge']);
 });
 
-Route::get('/download/{type}/{filename}', [FileController::class, 'download'])->name('files.download');;
+Route::get('/download/{type}/{filename}', [FileController::class, 'download'])->name('files.download');
+
+Route::get('/file-job/{id}', function ($id) {
+    $job = \App\Models\FileJob::findOrFail($id);
+    if ($job->status === 'failed') {
+        return response()->json([
+            'status' => $job->status,
+            'progress_stage' => $job->progress_stage,
+            'result' => $job->result,
+        ], 422); // or 400/500 depending on semantics
+    }
+
+    return response()->json([
+        'status' => $job->status,
+        'progress_stage' => $job->progress_stage,
+        'result' => $job->result,
+    ]);
+});
