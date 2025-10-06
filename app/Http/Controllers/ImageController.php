@@ -84,6 +84,7 @@ class ImageController extends Controller
             exec("pngquant --force --quality={$minQuality}-{$maxQuality} --output {$fullPath} {$fullPath}");
         }
 
+        // Clearing the cache of the path because it was returning the size before running pngquant
         clearstatcache(true, $fullPath);
         $finalSize = filesize($fullPath);
 
