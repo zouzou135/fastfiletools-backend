@@ -34,21 +34,6 @@ class ImageController extends Controller
         }
     }
 
-    function runCommand(string $command): array
-    {
-        $output = [];
-        $returnCode = 0;
-
-        // Redirect stderr (2) to stdout (1) so we capture all output
-        exec($command . ' 2>&1', $output, $returnCode);
-
-        return [
-            'code'   => $returnCode,
-            'output' => implode("\n", $output),
-            'lines'  => $output,
-        ];
-    }
-
 
     public function compress(Request $request)
     {
@@ -90,14 +75,13 @@ class ImageController extends Controller
 
         $fullPath = storage_path("app/public/{$path}");
 
-        $pngExec = null;
         // Post-process with shell tools
         if (in_array($extension, ['jpg', 'jpeg'])) {
             exec("jpegoptim --strip-all --preserve --max={$quality} {$fullPath}");
         } elseif ($extension === 'png') {
             $minQuality = max(0, $quality - 20);
             $maxQuality = min(100, $quality);
-            $pngExec = $this->runCommand("pngquant --force --quality={$minQuality}-{$maxQuality} --output {$fullPath} {$fullPath}");
+            exec("pngquant --force --quality={$minQuality}-{$maxQuality} --output {$fullPath} {$fullPath}");
         }
 
         $finalSize = filesize($fullPath);
@@ -121,7 +105,6 @@ class ImageController extends Controller
             'expires_at'      => $processedFile->expires_at->toDateTimeString(),
             'original_size'   => $image->getSize(),
             'compressed_size' => $processedFile->size,
-            'exec' => $pngExec["output"],
         ]);
     }
 
