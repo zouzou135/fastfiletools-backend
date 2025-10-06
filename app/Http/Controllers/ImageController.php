@@ -60,6 +60,7 @@ class ImageController extends Controller
                 $compressed = $img->encodeByExtension($extension, $quality);
                 break;
             case 'png':
+                $compressed = null;
                 // $compressed = $img->encodeByExtension('png'); // quality ignored here
                 break;
             default:
