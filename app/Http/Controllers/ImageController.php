@@ -46,19 +46,51 @@ class ImageController extends Controller
         $quality  = $request->get('quality', 80);
         $originalName = pathinfo($image->getClientOriginalName(), PATHINFO_FILENAME);
         $safeName = Str::slug($originalName); // makes it URL-safe
-        $filename = $safeName . '-' . Str::random(8) . '.' . $image->getClientOriginalExtension();
+        $extension = strtolower($image->getClientOriginalExtension());
+        $filename = $safeName . '-' . Str::random(8) . '.' . $extension;;
         $path     = 'compressed/' . $filename;
 
         $img        = $this->imageManager->read($image);
-        $compressed = $img->encodeByExtension($image->getClientOriginalExtension(), $quality);
+
+        // Encode based on format
+        switch ($extension) {
+            case 'jpg':
+            case 'jpeg':
+            case 'webp':
+                $compressed = $img->encodeByExtension($extension, $quality);
+                break;
+            case 'png':
+                $compressed = $img->encodeByExtension('png'); // quality ignored here
+                break;
+            default:
+                try {
+                    $compressed = $img->encodeByExtension($extension, $quality);
+                } catch (\Exception $e) {
+                    // fallback to default encoding if quality fails
+                    $compressed = $img->encodeByExtension($extension);
+                }
+        }
 
         Storage::disk('public')->put($path, $compressed);
+
+        $fullPath = storage_path("app/public/{$path}");
+
+        // Post-process with shell tools
+        if (in_array($extension, ['jpg', 'jpeg'])) {
+            exec("jpegoptim --strip-all --preserve --max={$quality} {$fullPath}");
+        } elseif ($extension === 'png') {
+            $minQuality = max(0, $quality - 20);
+            $maxQuality = min(100, $quality);
+            exec("pngquant --force --quality={$minQuality}-{$maxQuality} --output {$fullPath} {$fullPath}");
+        }
+
+        $finalSize = filesize($fullPath);
 
         $processedFile = ProcessedFile::create([
             'filename'   => $filename,
             'type'       => 'compressed',
             'path'       => $path,
-            'size'       => strlen($compressed),
+            'size'       => $finalSize,
             'expires_at' => now()->addHours(2),
         ]);
 
