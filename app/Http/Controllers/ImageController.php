@@ -60,7 +60,7 @@ class ImageController extends Controller
                 $compressed = $img->encodeByExtension($extension, $quality);
                 break;
             case 'png':
-                $compressed = $img->encodeByExtension('png'); // quality ignored here
+                // $compressed = $img->encodeByExtension('png'); // quality ignored here
                 break;
             default:
                 try {
@@ -71,7 +71,12 @@ class ImageController extends Controller
                 }
         }
 
-        Storage::disk('public')->put($path, $compressed);
+        if ($compressed) {
+            Storage::disk('public')->put($path, $compressed);
+        } else {
+            Storage::disk('public')->putFileAs('compressed', $image, $filename);
+        }
+
 
         $fullPath = storage_path("app/public/{$path}");
 
