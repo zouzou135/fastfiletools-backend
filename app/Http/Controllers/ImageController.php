@@ -82,7 +82,7 @@ class ImageController extends Controller
         } elseif ($extension === 'png') {
             $minQuality = max(0, $quality - 20);
             $maxQuality = min(100, $quality);
-            exec("pngquant --force --quality={$minQuality}-{$maxQuality} --output {$fullPath} {$fullPath}");
+            $pngExec = exec("pngquant --force --quality={$minQuality}-{$maxQuality} --output {$fullPath} {$fullPath}");
         }
 
         $finalSize = filesize($fullPath);
