@@ -71,7 +71,7 @@ class ImageController extends Controller
                 }
         }
 
-        if ($compressed) {
+        if ($compressed != null) {
             Storage::disk('public')->put($path, $compressed);
         } else {
             Storage::disk('public')->putFileAs('compressed', $image, $filename);
