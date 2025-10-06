@@ -121,7 +121,7 @@ class ImageController extends Controller
             'expires_at'      => $processedFile->expires_at->toDateTimeString(),
             'original_size'   => $image->getSize(),
             'compressed_size' => $processedFile->size,
-            'exec' => $pngExec?->output,
+            'exec' => $pngExec?->get("output"),
         ]);
     }
 
