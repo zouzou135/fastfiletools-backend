@@ -38,7 +38,7 @@ class ImageController extends Controller
     public function compress(Request $request)
     {
         $request->validate([
-            'image'   => 'required|image', // 10MB max
+            'image'   => 'required|image|max:10240', // 10MB max
             'quality' => 'integer|between:10,100'
         ]);
 
