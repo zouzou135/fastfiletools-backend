@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\Models\FileJob;
 use App\Models\ProcessedFile;
+use App\Services\PdfService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -25,112 +26,31 @@ class SplitPdfJob implements ShouldQueue
         $job = FileJob::findOrFail($this->jobId);
         $job->update(['status' => 'processing', 'progress_stage' => 'uploaded']);
 
-        $pdfPath = $this->data['pdf_path'];
-        $pageString = $this->data['pages'];
-        $originalName = pathinfo($this->data['original_name'], PATHINFO_FILENAME);
-        $safeName = Str::slug($originalName);
+        $service = new PdfService();
 
-        $normalizedPath = storage_path('app/temp/normalized-' . Str::random(8) . '.pdf');
-
-        try {
-            // Normalize with Ghostscript
-            $job->update(['progress_stage' => 'normalizing']);
-            $process = new Process([
-                'gs',
-                '-sDEVICE=pdfwrite',
-                '-dCompatibilityLevel=1.4',
-                '-dPDFSETTINGS=/screen',
-                '-dNOPAUSE',
-                '-dQUIET',
-                '-dBATCH',
-                "-sOutputFile=$normalizedPath",
-                $pdfPath
-            ]);
-            $process->run();
-
-            if (!$process->isSuccessful() || !file_exists($normalizedPath)) {
-                $job->update([
-                    'status' => 'failed',
-                    'progress_stage' => 'error',
-                    'result' => ['message' => $process->getOutput()]
-                ]);
-                return;
+        $result = $service->split(
+            $this->data['pdf_path'],
+            $this->data['pages'],
+            $this->data['original_name'],
+            function ($stage) use ($job) {
+                // Callback from service to update stage
+                $job->update(['progress_stage' => $stage]);
             }
+        );
 
-            $fpdi = new Fpdi();
-            $pageCount = $fpdi->setSourceFile($normalizedPath);
-
-            $ranges = explode(',', $pageString);
-            $splitPdfs = [];
-
-            $job->update(['progress_stage' => 'splitting']);
-
-            foreach ($ranges as $range) {
-                $range = trim($range);
-                [$start, $end] = strpos($range, '-') !== false
-                    ? array_map('intval', explode('-', $range))
-                    : [(int)$range, (int)$range];
-
-                // Bounds check
-                if ($start < 1 || $end > $pageCount || $start > $end) {
-                    $job->update([
-                        'status' => 'failed',
-                        'progress_stage' => 'validation_failed',
-                        'result' => ['message' => "Invalid range {$range}. This PDF has {$pageCount} pages."]
-                    ]);
-                    return;
-                }
-
-                $fpdiRange = new Fpdi();
-                $fpdiRange->setSourceFile($normalizedPath);
-
-                for ($i = $start; $i <= $end; $i++) {
-                    $fpdiRange->AddPage();
-                    $template = $fpdiRange->importPage($i);
-                    $fpdiRange->useTemplate($template);
-                }
-
-                $filename = $safeName . "-pages-$start-$end-" . Str::random(8) . '.pdf';
-                $content  = $fpdiRange->Output('', 'S');
-
-                Storage::disk('public')->put("split/$filename", $content);
-
-                $processedFile = ProcessedFile::create([
-                    'filename'   => $filename,
-                    'type'       => 'split',
-                    'path'       => "split/$filename",
-                    'size'       => strlen($content),
-                    'expires_at' => now()->addHours(2),
-                ]);
-
-                $splitPdfs[] = [
-                    'range'        => $start === $end ? (string)$start : "$start-$end",
-                    'filename'     => $filename,
-                    'download_url' => route('files.download', ['type' => 'split', 'filename' => $filename]),
-                    'url'          => Storage::disk('public')->url($processedFile->path),
-                    'expires_at'   => $processedFile->expires_at->toDateTimeString(),
-                ];
-            }
-
-            $job->update([
-                'status' => 'completed',
-                'progress_stage' => 'completed',
-                'result' => ['split_pdfs' => $splitPdfs]
-            ]);
-        } catch (\Throwable $e) {
+        if (!$result['success']) {
             $job->update([
                 'status' => 'failed',
                 'progress_stage' => 'error',
-                'result' => ['message' => $e->getMessage()]
+                'result' => ['message' => $result['message']]
             ]);
-            throw $e;
-        } finally {
-            if (file_exists($normalizedPath)) {
-                unlink($normalizedPath);
-            }
-            if (file_exists($pdfPath)) {
-                unlink($pdfPath);
-            }
+            return;
         }
+
+        $job->update([
+            'status' => 'completed',
+            'progress_stage' => 'completed',
+            'result' => ['split_pdfs' => $result['split_pdfs'], 'zip' => $result['zip'] ?? null]
+        ]);
     }
 }

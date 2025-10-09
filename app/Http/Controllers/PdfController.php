@@ -6,6 +6,7 @@ use App\Jobs\MergePdfJob;
 use App\Jobs\SplitPdfJob;
 use App\Models\FileJob;
 use App\Models\ProcessedFile;
+use App\Services\PdfService;
 use File;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
@@ -54,6 +55,24 @@ class PdfController extends Controller
         $path = $request->file('pdf')->store('', 'temp');
         $absolutePath = Storage::disk('temp')->path($path);
 
+        $maxSyncSize = 5 * 1024 * 1024; // 5 MB
+
+        if ($request->file('pdf')->getSize() <= $maxSyncSize) {
+            // Inline processing
+            $service = new PdfService();
+            $result = $service->split(
+                $absolutePath,
+                $pageString,
+                $request->file('pdf')->getClientOriginalName()
+            );
+
+            if (!$result['success']) {
+                return response()->json(['success' => false, 'message' => $result['message']], 422);
+            }
+
+            return response()->json($result);
+        }
+
         // Create job record
         $job = FileJob::create([
             'type' => 'pdf_split',
@@ -83,6 +102,26 @@ class PdfController extends Controller
             fn($pdf) => Storage::disk('temp')->path($pdf->store('', 'temp')),
             $request->file('pdfs')
         );
+
+        $maxSyncSize = 5 * 1024 * 1024; // 5 MB
+
+        // Calculate total size of all uploaded PDFs
+        $totalSize = array_sum(array_map(fn($pdf) => $pdf->getSize(), $request->file('pdfs')));
+
+        if ($totalSize <= $maxSyncSize) {
+            // Inline processing
+            $service = new PdfService();
+            $result = $service->merge(
+                $pdfPaths,
+                $request->file('pdfs')[0]->getClientOriginalName()
+            );
+
+            if (!$result['success']) {
+                return response()->json(['success' => false, 'message' => $result['message']], 422);
+            }
+
+            return response()->json($result);
+        }
 
         // Create job record
         $job = FileJob::create([
