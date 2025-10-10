@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Jobs\MergePdfJob;
+use App\Jobs\PdfsToImagesJob;
 use App\Jobs\SplitPdfJob;
 use App\Models\FileJob;
 use App\Models\ProcessedFile;
@@ -132,7 +133,56 @@ class PdfController extends Controller
 
         // Dispatch background job
         MergePdfJob::dispatch([
-            'pdf_paths' => $pdfPaths,
+            'pdfPaths' => $pdfPaths,
+            'original_name' => $request->file('pdfs')[0]->getClientOriginalName(),
+        ], $job->id);
+
+        return response()->json(['job_id' => $job->id]);
+    }
+
+    public function pdfsToImages(Request $request)
+    {
+        $request->validate([
+            'pdfs' => 'required|array',
+            'pdfs.*' => 'mimes:pdf|max:50240'
+        ]);
+
+        // Store all uploaded PDFs in temp
+        $pdfPaths = array_map(
+            fn($pdf) => Storage::disk('temp')->path($pdf->store('', 'temp')),
+            $request->file('pdfs')
+        );
+
+        $maxSyncSize = 5 * 1024 * 1024; // 5 MB
+
+        // Calculate total size of all uploaded PDFs
+        $totalSize = array_sum(array_map(fn($pdf) => $pdf->getSize(), $request->file('pdfs')));
+
+        if ($totalSize <= $maxSyncSize) {
+            // Inline processing
+            $service = new PdfService();
+            $result = $service->pdfsToImages(
+                $pdfPaths,
+                $request->file('pdfs')[0]->getClientOriginalName()
+            );
+
+            if (!$result['success']) {
+                return response()->json(['success' => false, 'message' => $result['message']], 422);
+            }
+
+            return response()->json($result);
+        }
+
+        // Create job record
+        $job = FileJob::create([
+            'type' => 'pdf_images',
+            'status' => 'pending',
+            'progress_stage' => 'queued',
+        ]);
+
+        // Dispatch background job
+        PdfsToImagesJob::dispatch([
+            'pdfPaths' => $pdfPaths,
             'original_name' => $request->file('pdfs')[0]->getClientOriginalName(),
         ], $job->id);
 

@@ -245,7 +245,6 @@ class PdfService
                 'success' => false,
                 'message' => ['message' => $e->getMessage()]
             ];
-            throw $e;
         } finally {
             // Cleanup normalized and original temp files
             foreach ($normalizedFiles as $file) {
@@ -255,5 +254,127 @@ class PdfService
                 if (file_exists($file)) unlink($file);
             }
         }
+    }
+
+    public function pdfsToImages(array $pdfPaths, string $originalName, int $dpi = 150, ?callable $progressCallback = null): array
+    {
+        $outputDir = storage_path('app/public/pdf-images');
+        $safeName = Str::slug(pathinfo($originalName, PATHINFO_FILENAME));
+
+        $imageFiles = array();
+
+
+        try {
+            foreach ($pdfPaths as $pdfPath) {
+                // Normalize with Ghostscript
+                if ($progressCallback !== null) {
+                    $progressCallback('converting');
+                }
+
+                $pdfBase = Str::slug(pathinfo($pdfPath, PATHINFO_FILENAME));
+                $process = new Process([
+                    'gs',
+                    '-dNOPAUSE',
+                    '-dBATCH',
+                    '-sDEVICE=png16m',
+                    "-r{$dpi}",
+                    "-sOutputFile={$outputDir}/{$pdfBase}-page-%03d.png",
+                    $pdfPath
+                ]);
+                $process->run();
+
+                if (!$process->isSuccessful()) {
+                    return ['success' => false, 'message' => $process->getErrorOutput()];
+                }
+
+                // Collect only this PDF’s outputs
+                $pattern = "{$outputDir}/{$pdfBase}-page-*.png";
+                $generated = collect(glob($pattern))
+                    ->map(function ($path) {
+                        $filename = basename($path);
+                        $relPath = "pdf-images/{$filename}";
+
+                        $processedFile = ProcessedFile::create([
+                            'filename'   => $filename,
+                            'type'       => 'pdf-images',
+                            'path'       => $relPath,
+                            'size'       => filesize($path),
+                            'expires_at' => now()->addHours(2),
+                        ]);
+
+                        return [
+                            'filename'     => $processedFile->filename,
+                            'url'          => Storage::disk('public')->url($relPath),
+                            'download_url' => route('files.download', [
+                                'type'     => $processedFile->type,
+                                'filename' => $processedFile->filename,
+                            ]),
+                            'expires_at'   => $processedFile->expires_at->toDateTimeString(),
+                        ];
+                    })
+                    ->toArray();
+
+                $imageFiles = array_merge($imageFiles, $generated);
+            }
+
+            $result = [
+                'success' => true,
+                'images' => $imageFiles,
+            ];
+
+            if (count($imageFiles) > 1) {
+                // Finalize ZIP
+                if ($progressCallback != null) {
+                    $progressCallback('zipping');
+                }
+                $zipFilename = $safeName . '-pdf-img-' . Str::random(8) . '.zip';
+                $zipPath = storage_path("app/temp/$zipFilename");
+                $zip = new ZipArchive();
+                $zip->open($zipPath, ZipArchive::CREATE);
+
+                foreach ($imageFiles as $imageFile) {
+                    $zip->addFile($outputDir . '/' . $imageFile['filename'], $imageFile['filename']);
+                }
+
+                $zip->close();
+
+                $publicZipPath = "pdf-images/$zipFilename";
+                Storage::disk('public')->putFileAs(
+                    'pdf-images',
+                    new HttpFile($zipPath),
+                    $zipFilename
+                );
+
+                $processedZip = ProcessedFile::create([
+                    'filename'   => $zipFilename,
+                    'type'       => 'pdf-images',
+                    'path'       => $publicZipPath,
+                    'size'       => Storage::disk('public')->size($publicZipPath),
+                    'expires_at' => now()->addHours(2),
+                ]);
+
+                $result['zip'] = [
+                    'filename'     => $zipFilename,
+                    'download_url' => route('files.download', ['type' => 'pdf-images', 'filename' => $zipFilename]),
+                    'url'          => Storage::disk('public')->url($processedZip->path),
+                    'expires_at'   => $processedZip->expires_at->toDateTimeString(),
+                ];
+
+                @unlink($zipPath);
+            }
+        } catch (\Throwable $e) {
+            return [
+                'success' => false,
+                'message' => ['message' => $e->getMessage()]
+            ];
+        } finally {
+            foreach ($pdfPaths as $file) {
+                if (file_exists($file)) {
+                    unlink($file);
+                }
+            }
+        }
+
+        return ['success' => true, 'images' => $imageFiles];
     }
 }

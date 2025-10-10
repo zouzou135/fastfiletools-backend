@@ -4,11 +4,13 @@ namespace App\Http\Controllers;
 
 use App\Models\ProcessedFile;
 use File;
+use Illuminate\Http\File as HttpFile;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Intervention\Image\Drivers\Gd\Driver;
 use Intervention\Image\ImageManager;
+use ZipArchive;
 
 class ImageController extends Controller
 {
@@ -230,5 +232,199 @@ class ImageController extends Controller
             'url'     => Storage::disk('public')->url($processedFile->path),
             'expires_at'   => $processedFile->expires_at->toDateTimeString(),
         ]);
+    }
+
+    public function toPng(Request $request)
+    {
+        $request->validate([
+            'images'   => 'required|array',
+            'images.*' => 'image|max:10240',
+        ]);
+
+        $images = $request->file('images');
+
+        // Use the first image’s name as a base
+        $originalName = pathinfo($images[0]->getClientOriginalName(), PATHINFO_FILENAME);
+        $safeName     = Str::slug($originalName);
+
+        $imageFiles = [];
+
+        // Decide early: do we need a ZIP?
+        $makeZip = count($images) > 1;
+        $zip = null;
+        $zipFilename = null;
+        $zipPath = null;
+        if ($makeZip) {
+            $zipFilename = $safeName . '-img-png-' . Str::random(8) . '.zip';
+            $zipPath = storage_path("app/temp/$zipFilename");
+            $zip = new ZipArchive();
+            $zip->open($zipPath, ZipArchive::CREATE);
+        }
+
+        foreach ($images as $image) {
+            $originalName = pathinfo($image->getClientOriginalName(), PATHINFO_FILENAME);
+            $safeName = Str::slug($originalName);
+            $filename = $safeName . '-' . Str::random(8) . '.png';
+            $path = 'img-png/' . $filename;
+
+            $img = $this->imageManager->read($image)->encodeByExtension('png');
+            Storage::disk('public')->put($path, $img);
+
+            if ($makeZip) {
+                $zip->addFromString($filename, $img);
+            }
+
+            $processedFile = ProcessedFile::create([
+                'filename' => $filename,
+                'type' => 'img-png',
+                'path' => $path,
+                'size' => Storage::disk('public')->size($path),
+                'expires_at' => now()->addHours(2),
+            ]);
+
+            $imageFiles[] = [
+                'filename' => $processedFile->filename,
+                'url' => Storage::disk('public')->url($processedFile->path),
+                'download_url' => route('files.download', [
+                    'type' => $processedFile->type,
+                    'filename' => $processedFile->filename,
+                ]),
+                'expires_at' => $processedFile->expires_at->toDateTimeString(),
+            ];
+        }
+
+        $result = [
+            'success' => true,
+            'files' => $imageFiles,
+        ];
+
+        if ($makeZip) {
+            $zip->close();
+
+            $publicZipPath = "img-png/$zipFilename";
+            Storage::disk('public')->putFileAs(
+                'img-png',
+                new HttpFile($zipPath),
+                $zipFilename
+            );
+
+            $processedZip = ProcessedFile::create([
+                'filename'   => $zipFilename,
+                'type'       => 'img-png',
+                'path'       => $publicZipPath,
+                'size'       => Storage::disk('public')->size($publicZipPath),
+                'expires_at' => now()->addHours(2),
+            ]);
+
+            $result['zip'] = [
+                'filename'     => $zipFilename,
+                'download_url' => route('files.download', ['type' => 'img-png', 'filename' => $zipFilename]),
+                'url'          => Storage::disk('public')->url($processedZip->path),
+                'expires_at'   => $processedZip->expires_at->toDateTimeString(),
+            ];
+        }
+
+        return response()->json($result);
+    }
+
+    public function toJpeg(Request $request)
+    {
+        $request->validate([
+            'images'   => 'required|array',
+            'images.*' => 'image|max:10240',
+            'quality'  => 'integer|between:10,100',
+        ]);
+
+        $quality = (int) $request->get('quality', 85);
+        $imageFiles = [];
+
+        $images = $request->file('images');
+
+        // Use the first image’s name as a base
+        $originalName = pathinfo($images[0]->getClientOriginalName(), PATHINFO_FILENAME);
+        $safeName     = Str::slug($originalName);
+
+        // Decide early: do we need a ZIP?
+        $makeZip = count($images) > 1;
+        $zip = null;
+        $zipFilename = null;
+        $zipPath = null;
+        if ($makeZip) {
+            $zipFilename = $safeName . '-img-jpeg-' . Str::random(8) . '.zip';
+            $zipPath = storage_path("app/temp/$zipFilename");
+            $zip = new ZipArchive();
+            $zip->open($zipPath, ZipArchive::CREATE);
+        }
+
+        foreach ($request->file('images') as $image) {
+            $originalName = pathinfo($image->getClientOriginalName(), PATHINFO_FILENAME);
+            $safeName = Str::slug($originalName);
+            $filename = $safeName . '-' . Str::random(8) . '.jpg';
+            $path = 'img-jpeg/' . $filename;
+
+            $img = $this->imageManager->read($image)->encodeByExtension('jpg', $quality);
+            Storage::disk('public')->put($path, $img);
+
+            if ($makeZip) {
+                $zip->addFromString($filename, $img);
+            }
+
+            $processedFile = ProcessedFile::create([
+                'filename' => $filename,
+                'type' => 'img-jpeg',
+                'path' => $path,
+                'size' => Storage::disk('public')->size($path),
+                'expires_at' => now()->addHours(2),
+            ]);
+
+            // $abs = storage_path("app/public/{$path}");
+            // // Optional post-process: jpegoptim for further reduction (if installed)
+            // @exec("jpegoptim --strip-all --preserve --max={$quality} {$abs}");
+
+            // clearstatcache(true, $abs);
+
+            $imageFiles[] = [
+                'filename' => $processedFile->filename,
+                'url' => Storage::disk('public')->url($processedFile->path),
+                'download_url' => route('files.download', [
+                    'type' => $processedFile->type,
+                    'filename' => $processedFile->filename,
+                ]),
+                'expires_at' => $processedFile->expires_at->toDateTimeString(),
+            ];
+        }
+
+        $result = [
+            'success' => true,
+            'files' => $imageFiles,
+        ];
+
+        if ($makeZip) {
+            $zip->close();
+
+            $publicZipPath = "img-jpeg/$zipFilename";
+            Storage::disk('public')->putFileAs(
+                'img-jpeg',
+                new HttpFile($zipPath),
+                $zipFilename
+            );
+
+            $processedZip = ProcessedFile::create([
+                'filename'   => $zipFilename,
+                'type'       => 'img-jpeg',
+                'path'       => $publicZipPath,
+                'size'       => Storage::disk('public')->size($publicZipPath),
+                'expires_at' => now()->addHours(2),
+            ]);
+
+            $result['zip'] = [
+                'filename'     => $zipFilename,
+                'download_url' => route('files.download', ['type' => 'img-jpeg', 'filename' => $zipFilename]),
+                'url'          => Storage::disk('public')->url($processedZip->path),
+                'expires_at'   => $processedZip->expires_at->toDateTimeString(),
+            ];
+        }
+
+        return response()->json($result);
     }
 }
