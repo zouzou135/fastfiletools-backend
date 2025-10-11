@@ -283,6 +283,8 @@ class PdfService
                 ]);
                 $process->run();
 
+                return ['success' => false, 'message' => $process->getErrorOutput()];
+
                 if (!$process->isSuccessful()) {
                     return ['success' => false, 'message' => $process->getErrorOutput()];
                 }
