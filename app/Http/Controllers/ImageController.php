@@ -295,7 +295,7 @@ class ImageController extends Controller
 
         $result = [
             'success' => true,
-            'files' => $imageFiles,
+            'images' => $imageFiles,
         ];
 
         if ($makeZip) {
@@ -396,7 +396,7 @@ class ImageController extends Controller
 
         $result = [
             'success' => true,
-            'files' => $imageFiles,
+            'images' => $imageFiles,
         ];
 
         if ($makeZip) {
