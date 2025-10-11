@@ -335,7 +335,7 @@ class ImageController extends Controller
             'quality'  => 'integer|between:10,100',
         ]);
 
-        $quality = (int) $request->get('quality', 85);
+        $quality = (int) $request->get('quality', 100);
         $imageFiles = [];
 
         $images = $request->file('images');
