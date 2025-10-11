@@ -375,6 +375,6 @@ class PdfService
             }
         }
 
-        return ['success' => true, 'images' => $imageFiles];
+        return $result;
     }
 }
