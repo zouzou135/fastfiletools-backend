@@ -9,8 +9,8 @@ Route::prefix('image')->group(function () {
     Route::post('/compress', [ImageController::class, 'compress']);
     Route::post('/tune', [ImageController::class, 'tune']);
     Route::post('/convert-to-pdf', [ImageController::class, 'convertToPdf']);
-    Route::post('/convert-to-png', [PdfController::class, 'toPng']);
-    Route::post('/convert-to-jpeg', [PdfController::class, 'toJpeg']);
+    Route::post('/convert-to-png', [ImageController::class, 'toPng']);
+    Route::post('/convert-to-jpeg', [ImageController::class, 'toJpeg']);
 });
 
 Route::prefix('pdf')->group(function () {
