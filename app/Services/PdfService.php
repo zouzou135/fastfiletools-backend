@@ -325,6 +325,7 @@ class PdfService
             $result = [
                 'success' => true,
                 'images' => $imageFiles,
+                'error' => $process->getErrorOutput()
             ];
 
             if (count($imageFiles) > 1) {
