@@ -31,7 +31,7 @@ class PdfsToImagesJob implements ShouldQueue
         $result = $service->pdfsToImages(
             $this->data['pdfPaths'],
             $this->data['original_name'],
-            $this->data['dpi'],
+            $this->data['dpi'] ?? 150, // default to 150 if not set
             function ($stage) use ($job) {
                 // Callback from service to update stage
                 $job->update(['progress_stage' => $stage]);
